@@ -130,8 +130,50 @@ local function findDescendantContaining(root, substr)
     local low = substr:lower()
     for _, v in ipairs(root:GetDescendants()) do
         if v.Name:lower():find(low, 1, true) then return v end
+        if (v:IsA("TextButton") or v:IsA("TextLabel")) and v.Text:lower():find(low, 1, true) then
+            return v
+        end
     end
     return nil
+end
+
+local function clickGuiButton(btn)
+    if not btn then return false end
+    local clicked = false
+
+    -- 1. firesignal (executors like Synapse, Krnl, Fluxus, Solara, Wave, Delta, etc.)
+    if firesignal then
+        pcall(function() firesignal(btn.MouseButton1Down) end)
+        pcall(function() firesignal(btn.MouseButton1Click) end)
+        pcall(function() firesignal(btn.MouseButton1Up) end)
+        pcall(function() firesignal(btn.Activated) end)
+        clicked = true
+    end
+
+    -- 2. Executor FireMouseButton1Click
+    pcall(function()
+        if btn.FireMouseButton1Click then
+            btn:FireMouseButton1Click()
+            clicked = true
+        end
+    end)
+
+    -- 3. VirtualInputManager fallback
+    pcall(function()
+        local vim = game:GetService("VirtualInputManager")
+        if vim and btn:IsA("GuiObject") and btn.Visible then
+            local absPos = btn.AbsolutePosition
+            local absSize = btn.AbsoluteSize
+            local cx = absPos.X + absSize.X / 2
+            local cy = absPos.Y + absSize.Y / 2
+            vim:SendMouseButtonEvent(cx, cy, 0, true, game, 0)
+            task.wait(0.04)
+            vim:SendMouseButtonEvent(cx, cy, 0, false, game, 0)
+            clicked = true
+        end
+    end)
+
+    return clicked
 end
 
 local function countInBackpack(substring)
@@ -188,74 +230,263 @@ end
 -- § 5 · ENGINE FUNCTIONS
 -- ─────────────────────────────────────────────────────────────────────────────
 
+-- ── Color & Skill Tree Helpers ────────────────────────────────────────────────
+local function isPurpleColor(c)
+    if not c then return false end
+    local h, s, v = c:ToHSV()
+    -- Violet / Magenta / Purple hue range in HSV is roughly 0.68 to 0.92
+    return (h >= 0.68 and h <= 0.92 and s >= 0.25 and v >= 0.35)
+        or (c.R > 0.4 and c.B > 0.45 and c.G < 0.6 and c.B > c.G * 1.2)
+end
+
+local function hasPurpleAppearance(guiObj)
+    if not guiObj or not guiObj:IsA("GuiObject") then return false end
+    if isPurpleColor(guiObj.BackgroundColor3) or isPurpleColor(guiObj.BorderColor3) then
+        return true
+    end
+    if (guiObj:IsA("ImageButton") or guiObj:IsA("ImageLabel")) and isPurpleColor(guiObj.ImageColor3) then
+        return true
+    end
+    for _, child in ipairs(guiObj:GetDescendants()) do
+        if child:IsA("UIStroke") and isPurpleColor(child.Color) then return true end
+        if child:IsA("ImageLabel") and isPurpleColor(child.ImageColor3) then return true end
+        if child:IsA("GuiObject") and (isPurpleColor(child.BackgroundColor3) or isPurpleColor(child.BorderColor3)) then
+            return true
+        end
+    end
+    return false
+end
+
+local function isWorthinessText(str)
+    if not str or type(str) ~= "string" then return false end
+    local low = str:lower()
+    return low:find("worth") or low:find("достоин") or low:find("достойн")
+end
+
+local function hasWorthinessName(guiObj)
+    if not guiObj then return false end
+    if isWorthinessText(guiObj.Name) then return true end
+    if guiObj:IsA("TextButton") and isWorthinessText(guiObj.Text) then return true end
+    for _, child in ipairs(guiObj:GetDescendants()) do
+        if child:IsA("TextLabel") and isWorthinessText(child.Text) then return true end
+    end
+    return false
+end
+
+local function openSkillTree()
+    -- Check if already open (looking for BACK button & skill points)
+    local backBtn = findDescendantContaining(PlayerGui, "BACK")
+        or findDescendantContaining(PlayerGui, "Назад")
+    local spLabel = findDescendantContaining(PlayerGui, "Очки навыков")
+        or findDescendantContaining(PlayerGui, "Skill Points")
+        or findDescendantContaining(PlayerGui, "Skill-Point")
+
+    if backBtn and backBtn:IsA("GuiButton") and backBtn.Visible then
+        return true
+    end
+
+    -- 1. Click Menu button or press M
+    local menuBtn = findDescendantContaining(PlayerGui, "Menu")
+        or findDescendantContaining(PlayerGui, "Меню")
+    if menuBtn and menuBtn:IsA("GuiButton") and menuBtn.Visible then
+        clickGuiButton(menuBtn)
+    else
+        pcall(function()
+            local vim = game:GetService("VirtualInputManager")
+            vim:SendKeyEvent(true, Enum.KeyCode.M, false, game)
+            task.wait(0.05)
+            vim:SendKeyEvent(false, Enum.KeyCode.M, false, game)
+        end)
+    end
+    task.wait(0.4)
+
+    -- 2. Click Character / Персонаж
+    local charBtn = findDescendantContaining(PlayerGui, "Персонаж")
+        or findDescendantContaining(PlayerGui, "Character")
+    if charBtn and charBtn:IsA("GuiButton") and charBtn.Visible then
+        clickGuiButton(charBtn)
+        task.wait(0.4)
+    end
+
+    -- 3. Click Skill Tree / Навыки if present
+    local skillBtn = findDescendantContaining(PlayerGui, "Skill Tree")
+        or findDescendantContaining(PlayerGui, "Навыки")
+    if skillBtn and skillBtn:IsA("GuiButton") and skillBtn.Visible then
+        clickGuiButton(skillBtn)
+        task.wait(0.5)
+    end
+
+    -- Verify if skill tree opened
+    for _ = 1, 8 do
+        backBtn = findDescendantContaining(PlayerGui, "BACK")
+            or findDescendantContaining(PlayerGui, "Назад")
+        if backBtn and backBtn:IsA("GuiButton") and backBtn.Visible then
+            return true
+        end
+        task.wait(0.1)
+    end
+    return false
+end
+
+local function closeSkillTree()
+    local backBtn = findDescendantContaining(PlayerGui, "BACK")
+        or findDescendantContaining(PlayerGui, "Назад")
+    if backBtn and backBtn:IsA("GuiButton") and backBtn.Visible then
+        clickGuiButton(backBtn)
+        task.wait(0.3)
+    end
+
+    local closeBtn = findDescendantContaining(PlayerGui, "Close")
+        or findDescendantContaining(PlayerGui, "Закрыть")
+        or findDescendantContaining(PlayerGui, "Exit")
+    if closeBtn and closeBtn:IsA("GuiButton") and closeBtn.Visible then
+        clickGuiButton(closeBtn)
+        task.wait(0.2)
+    end
+end
+
+local function learnSkillNode(node)
+    if not node then return false end
+    -- First click: select node
+    clickGuiButton(node)
+    task.wait(0.2)
+
+    -- Check if card has "Нажмите еще раз, чтобы узнать" or "Click again to learn"
+    local needsSecondClick = false
+    for _, v in ipairs(PlayerGui:GetDescendants()) do
+        if v:IsA("TextLabel") and v.Visible then
+            local t = v.Text:lower()
+            if t:find("нажмите еще раз") or t:find("click again") then
+                needsSecondClick = true
+                break
+            end
+        end
+    end
+
+    -- Check for explicit learn button
+    for _, v in ipairs(PlayerGui:GetDescendants()) do
+        if v:IsA("GuiButton") and v.Visible then
+            local t = (v.Text or ""):lower()
+            if t == "learn" or t == "выучить" or t == "купить" then
+                clickGuiButton(v)
+                task.wait(0.25)
+                return true
+            end
+        end
+    end
+
+    -- Second click: Learn skill (YBA mechanic)
+    if needsSecondClick then
+        clickGuiButton(node)
+        task.wait(0.25)
+        return true
+    end
+
+    return false
+end
+
 -- ── 5A · Worthiness unlock ────────────────────────────────────────────────────
 local function unlockWorthiness()
     State.CurrentPhase = "UNLOCKING_WORTHINESS"
 
-    local menuBtn = findDescendantContaining(PlayerGui, "Menu")
-    pcall(function()
-        if menuBtn and menuBtn:IsA("GuiButton") then menuBtn:FireMouseButton1Click() end
-    end)
-    task.wait(Config.ShopDelay)
+    local opened = openSkillTree()
+    if not opened then
+        task.wait(0.3)
+        openSkillTree()
+    end
+    task.wait(0.4)
 
-    local charBtn = findDescendantContaining(PlayerGui, "Персонаж")
-        or findDescendantContaining(PlayerGui, "Character")
-    pcall(function()
-        if charBtn and charBtn:IsA("GuiButton") then charBtn:FireMouseButton1Click() end
-    end)
-    task.wait(Config.ShopDelay)
-
-    local skillBtn = findDescendantContaining(PlayerGui, "Skill Tree")
-        or findDescendantContaining(PlayerGui, "Навыки")
-    pcall(function()
-        if skillBtn and skillBtn:IsA("GuiButton") then skillBtn:FireMouseButton1Click() end
-    end)
-    task.wait(0.8)
-
-    local worthNode = findDescendantContaining(PlayerGui, "Worthiness")
-        or findDescendantContaining(PlayerGui, "Достоинство")
-
-    if worthNode then
-        local actionBtn = nil
-        local parent = worthNode.Parent
-        if parent then
-            for _, child in ipairs(parent:GetDescendants()) do
-                if child:IsA("TextButton") then
-                    local txt = child.Text:upper()
-                    if txt == "LEARN" or txt == "LEARNED" or txt == "ВЫУЧИТЬ" or txt == "ВЫУЧЕНО" then
-                        actionBtn = child
-                        break
+    -- Collect all potential skill node buttons
+    local allButtons = {}
+    for _, v in ipairs(PlayerGui:GetDescendants()) do
+        if v:IsA("GuiButton") and v.Visible then
+            local txt = (v.Text or ""):lower()
+            local name = v.Name:lower()
+            if txt ~= "back" and txt ~= "назад" and txt ~= "close" and txt ~= "закрыть"
+               and not txt:find("очки навыков") and not txt:find("skill point")
+               and not name:find("menu") and not name:find("close") and not name:find("back") then
+                local s = v.AbsoluteSize
+                if s.X >= 25 and s.X <= 160 and s.Y >= 25 and s.Y <= 160 then
+                    local aspect = s.X / math.max(s.Y, 1)
+                    if aspect >= 0.7 and aspect <= 1.4 then
+                        table.insert(allButtons, v)
                     end
-                end
-            end
-        end
-
-        if actionBtn then
-            local btnText = actionBtn.Text:upper()
-            if btnText == "LEARNED" or btnText == "ВЫУЧЕНО" then
-                State.Worthiness = "LEARNED"
-            elseif btnText == "LEARN" or btnText == "ВЫУЧИТЬ" then
-                local spLabel = findDescendantContaining(PlayerGui, "Skill-Point")
-                    or findDescendantContaining(PlayerGui, "SP")
-                local spCount = 0
-                if spLabel and spLabel:IsA("TextLabel") then
-                    spCount = tonumber(spLabel.Text:match("%d+")) or 0
-                end
-                if spCount >= 1 then
-                    pcall(function() actionBtn:FireMouseButton1Click() end)
-                    task.wait(0.3)
-                    State.Worthiness = "LEARNED"
                 end
             end
         end
     end
 
-    local closeBtn = findDescendantContaining(PlayerGui, "Close")
-        or findDescendantContaining(PlayerGui, "Закрыть")
-    pcall(function()
-        if closeBtn and closeBtn:IsA("GuiButton") then closeBtn:FireMouseButton1Click() end
-    end)
-    task.wait(Config.ShopDelay)
+    -- Find the Worthiness node
+    -- 1. By purple appearance ("до фиолетового кружочка")
+    -- 2. By name / text ("достойность-worthiness")
+    local worthinessNode = nil
+    for _, btn in ipairs(allButtons) do
+        if hasPurpleAppearance(btn) or hasWorthinessName(btn) then
+            worthinessNode = btn
+            break
+        end
+    end
+
+    -- Fallback: click buttons and check card title
+    if not worthinessNode then
+        for _, btn in ipairs(allButtons) do
+            clickGuiButton(btn)
+            task.wait(0.1)
+            for _, lbl in ipairs(PlayerGui:GetDescendants()) do
+                if lbl:IsA("TextLabel") and lbl.Visible and isWorthinessText(lbl.Text) then
+                    worthinessNode = btn
+                    break
+                end
+            end
+            if worthinessNode then break end
+        end
+    end
+
+    if worthinessNode then
+        -- Find prerequisite nodes leading to it in the same vertical column
+        local prereqs = {}
+        local wx = worthinessNode.AbsolutePosition.X
+        local wy = worthinessNode.AbsolutePosition.Y
+
+        for _, btn in ipairs(allButtons) do
+            if btn ~= worthinessNode then
+                local bx = btn.AbsolutePosition.X
+                local by = btn.AbsolutePosition.Y
+                -- Same column: X within 35 pixels, and Y > wy (below it in the tree)
+                if math.abs(bx - wx) <= 35 and by > wy then
+                    table.insert(prereqs, btn)
+                end
+            end
+        end
+
+        -- Sort prerequisites from bottom (largest Y) to top (smaller Y)
+        table.sort(prereqs, function(a, b)
+            return a.AbsolutePosition.Y > b.AbsolutePosition.Y
+        end)
+
+        -- Unlock prerequisite nodes in order
+        for _, preNode in ipairs(prereqs) do
+            learnSkillNode(preNode)
+            task.wait(0.15)
+        end
+
+        -- Unlock the purple Worthiness node
+        learnSkillNode(worthinessNode)
+        task.wait(0.2)
+        State.Worthiness = "LEARNED"
+    else
+        -- Direct fallback by name
+        local worthFallback = findDescendantContaining(PlayerGui, "Worthiness")
+            or findDescendantContaining(PlayerGui, "Достоинство")
+        if worthFallback then
+            learnSkillNode(worthFallback)
+            State.Worthiness = "LEARNED"
+        end
+    end
+
+    -- Close skill tree and return to game
+    closeSkillTree()
+    task.wait(0.4)
 end
 
 -- ── 5B · Map Scavenger ────────────────────────────────────────────────────────
@@ -326,7 +557,7 @@ local function buyFromShop(needItem, needRoka)
         end
     end
     if menuBtn then
-        pcall(function() menuBtn:FireMouseButton1Click() end)
+        clickGuiButton(menuBtn)
         task.wait(Config.ShopDelay)
     end
 
@@ -340,7 +571,7 @@ local function buyFromShop(needItem, needRoka)
         end
     end
     if shopBtn then
-        pcall(function() shopBtn:FireMouseButton1Click() end)
+        clickGuiButton(shopBtn)
         task.wait(Config.ShopDelay * 1.5)
     end
 
@@ -356,13 +587,13 @@ local function buyFromShop(needItem, needRoka)
                             if child:IsA("TextButton") then
                                 local ct = child.Text:lower()
                                 if ct:find("buy") or ct:find("купить") or ct:find("purchase") then
-                                    pcall(function() child:FireMouseButton1Click() end)
+                                    clickGuiButton(child)
                                     task.wait(Config.ShopDelay)
                                     local confirmBtn = findDescendantContaining(PlayerGui, "Confirm")
                                         or findDescendantContaining(PlayerGui, "Yes")
                                         or findDescendantContaining(PlayerGui, "Да")
                                     if confirmBtn and confirmBtn:IsA("GuiButton") then
-                                        pcall(function() confirmBtn:FireMouseButton1Click() end)
+                                        clickGuiButton(confirmBtn)
                                         task.wait(Config.ShopDelay)
                                     end
                                     return true
@@ -390,9 +621,9 @@ local function buyFromShop(needItem, needRoka)
 
     local closeShop = findDescendantContaining(PlayerGui, "Close")
         or findDescendantContaining(PlayerGui, "Закрыть")
-    pcall(function()
-        if closeShop and closeShop:IsA("GuiButton") then closeShop:FireMouseButton1Click() end
-    end)
+    if closeShop and closeShop:IsA("GuiButton") then
+        clickGuiButton(closeShop)
+    end
     task.wait(Config.ShopDelay)
 
     State.ItemCount = countInBackpack(Config.ItemType)
@@ -401,20 +632,54 @@ end
 
 -- ── 5D · Dialogue Confirmer ───────────────────────────────────────────────────
 local function confirmDialogue()
-    task.wait(0.4)
-    local yesBtn = findDescendantContaining(PlayerGui, "Yes")
-        or findDescendantContaining(PlayerGui, "Да")
-        or findDescendantContaining(PlayerGui, "Confirm")
-    if yesBtn and yesBtn:IsA("GuiButton") then
-        pcall(function() yesBtn:FireMouseButton1Click() end)
-        task.wait(0.3)
+    local startTime = tick()
+    while tick() - startTime < 3 do
+        for _, v in ipairs(PlayerGui:GetDescendants()) do
+            if v:IsA("GuiButton") and v.Visible then
+                local txt = (v.Text or ""):lower():gsub("%s+", "")
+                local name = v.Name:lower():gsub("%s+", "")
+
+                if txt == "yes" or txt == "да"
+                   or txt == "eat" or txt == "съесть" or txt == "покушать"
+                   or txt == "use" or txt == "использовать" or txt == "применить"
+                   or txt:find("confirm") or txt:find("подтверд")
+                   or name == "option1" or name == "choice1" or name == "yes" then
+                    clickGuiButton(v)
+                    task.wait(0.3)
+                    return true
+                end
+            end
+        end
+        task.wait(0.15)
     end
+    return false
 end
 
 -- ── 5E · Stand Detection ──────────────────────────────────────────────────────
 local function detectCurrentStand()
+    -- 1. Check PlayerStats (most reliable in YBA)
+    local pStats = LocalPlayer:FindFirstChild("PlayerStats")
+    if pStats then
+        local sVal = pStats:FindFirstChild("Stand")
+        if sVal and sVal:IsA("StringValue") and sVal.Value ~= "" and sVal.Value ~= "None" and sVal.Value ~= "Standless" then
+            return sVal.Value
+        end
+    end
+
+    -- 2. Check Player / Character Attributes
+    local attrStand = LocalPlayer:GetAttribute("Stand")
+    if attrStand and type(attrStand) == "string" and attrStand ~= "" and attrStand ~= "None" and attrStand ~= "Standless" then
+        return attrStand
+    end
+
     local char = LocalPlayer.Character
     if char then
+        local charAttr = char:GetAttribute("Stand")
+        if charAttr and type(charAttr) == "string" and charAttr ~= "" and charAttr ~= "None" and charAttr ~= "Standless" then
+            return charAttr
+        end
+
+        -- 3. Check Character Models
         for _, obj in ipairs(char:GetChildren()) do
             if obj:IsA("Model") then
                 for _, s in ipairs(Config.StandPool) do
@@ -423,13 +688,17 @@ local function detectCurrentStand()
             end
         end
     end
+
+    -- 4. Check PlayerGui HUD labels
     for _, v in ipairs(PlayerGui:GetDescendants()) do
-        if v:IsA("TextLabel") then
+        if v:IsA("TextLabel") and v.Visible then
+            local t = v.Text:lower()
             for _, s in ipairs(Config.StandPool) do
-                if v.Text:lower():find(s:lower(), 1, true) then return s end
+                if t:find(s:lower(), 1, true) then return s end
             end
         end
     end
+
     return "None"
 end
 
@@ -438,6 +707,32 @@ local function runLoop()
     while State.Running do
         waitAlive()
 
+        -- Check if target stand is already equipped right at the start
+        local initialStand = detectCurrentStand()
+        State.ActiveStand = initialStand
+        if initialStand ~= "None" and initialStand:lower():find(Config.TargetStand:lower(), 1, true) then
+            State.CurrentPhase = "FINISHED"
+            State.Running      = false
+
+            pcall(function()
+                Library:Notify("Целевой стенд уже получен: " .. initialStand, 10)
+            end)
+            pcall(function()
+                game:GetService("StarterGui"):SetCore("SendNotification", {
+                    Title    = "Scythe | YBA",
+                    Text     = "Целевой стенд уже получен: " .. initialStand,
+                    Duration = 10,
+                })
+            end)
+            pcall(function()
+                if Toggles and Toggles.AutoRollToggle then
+                    Toggles.AutoRollToggle:SetValue(false)
+                end
+            end)
+            return
+        end
+
+        -- Check inventory
         State.ItemCount = countInBackpack(Config.ItemType)
         State.RokaCount = countInBackpack("Rokakaka")
 
@@ -456,36 +751,82 @@ local function runLoop()
                 State.ItemCount = countInBackpack(Config.ItemType)
                 State.RokaCount = countInBackpack("Rokakaka")
                 if State.ItemCount == 0 or State.RokaCount == 0 then
-                    task.wait(2) ; continue
+                    pcall(function()
+                        Library:Notify("Недостаточно предметов! Стрелы: " .. State.ItemCount .. " | Рока: " .. State.RokaCount, 3)
+                    end)
+                    task.wait(2)
+                    continue
                 end
             end
         end
 
+        -- ── STEP 1 · EAT ROKAKAKA ───────────────────────────────────────────
+        -- "как только я включаю функцию что бы он брал рокаку в руки использывал ее"
+        State.CurrentPhase = "RESETTING"
+        local roka = equipTool("Rokakaka")
+        if roka then
+            task.wait(0.3)
+            local char = LocalPlayer.Character
+            if char then
+                local eq = char:FindFirstChildOfClass("Tool")
+                if eq then
+                    pcall(function() eq:Activate() end)
+                    task.wait(0.3)
+                    confirmDialogue()
+                end
+            end
+            task.wait(2.5)
+            waitAlive()
+            task.wait(0.5)
+        else
+            pcall(function()
+                Library:Notify("Рокакака не найдена в инвентаре!", 3)
+            end)
+            task.wait(1)
+            continue
+        end
+
+        -- ── STEP 2 · BACKGROUND WORTHINESS UPGRADE ──────────────────────────
+        -- "делал фоновую прокачку ... до фиолетового кружочка под названием достойность-worthiness"
+        State.CurrentPhase = "UNLOCKING_WORTHINESS"
         pcall(unlockWorthiness)
+        task.wait(0.5)
         waitAlive()
 
+        -- ── STEP 3 · USE ROLLING ITEM ───────────────────────────────────────
+        -- "брал стрелу или то что выбрано в rolling item и использывал ее"
         State.CurrentPhase = "ROLLING"
-        local rollingItem  = equipTool(Config.ItemType)
-        if not rollingItem then
-            task.wait(Config.LoopDelay) ; continue
-        end
-
-        local char = LocalPlayer.Character
-        if char then
-            local equipped = char:FindFirstChildOfClass("Tool")
-            if equipped then
-                pcall(function() equipped:Activate() end)
-                task.wait(0.2)
-                confirmDialogue()
+        local rollingItem = equipTool(Config.ItemType)
+        if rollingItem then
+            task.wait(0.3)
+            local char = LocalPlayer.Character
+            if char then
+                local equipped = char:FindFirstChildOfClass("Tool")
+                if equipped then
+                    pcall(function() equipped:Activate() end)
+                    task.wait(0.3)
+                    confirmDialogue()
+                end
             end
+            task.wait(2.0)
+            waitAlive()
+        else
+            pcall(function()
+                Library:Notify(Config.ItemType .. " не найден в инвентаре!", 3)
+            end)
+            task.wait(1)
+            continue
         end
 
+        -- ── STEP 4 · STAND DETECTION & TARGET CHECK ─────────────────────────
+        -- "и так пока не выбьет определенный стенд который выбран в target stand"
+        State.CurrentPhase = "DETECTING_STAND"
         local detectStart = tick()
         local newStand    = "None"
         repeat
-            task.wait(0.3)
+            task.wait(0.4)
             newStand = detectCurrentStand()
-        until newStand ~= "None" or tick() - detectStart > 5
+        until (newStand ~= "None" and newStand ~= "Standless") or tick() - detectStart > 6
 
         State.ActiveStand = newStand
 
@@ -513,25 +854,12 @@ local function runLoop()
                 end
             end)
             return
+        else
+            pcall(function()
+                Library:Notify("Выпал стенд: " .. newStand .. " (Нужен: " .. Config.TargetStand .. ")", 3)
+            end)
         end
 
-        -- Wrong stand — reset with Rokakaka
-        State.CurrentPhase = "RESETTING"
-        local roka = equipTool("Rokakaka")
-        if roka then
-            local char2 = LocalPlayer.Character
-            if char2 then
-                local eq = char2:FindFirstChildOfClass("Tool")
-                if eq then
-                    pcall(function() eq:Activate() end)
-                    task.wait(0.2)
-                    confirmDialogue()
-                end
-            end
-        end
-
-        task.wait(2)
-        State.CurrentPhase = "IDLE"
         task.wait(Config.LoopDelay)
     end
 
